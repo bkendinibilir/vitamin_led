@@ -1,3 +1,6 @@
+import datetime
+from daemonize import Daemonize
+import logging
 import re
 import serial
 import signal
@@ -5,48 +8,71 @@ import sys
 import time
 import threading
 
-def exit_program(msg, errorcode=0):
-	print msg
-	sys.exit(errorcode)
+pid_file = "/tmp/vitamin-led.pid"
+log_file = "/tmp/vitamin-led.log"
+syslog = "/var/log/system.log"
+
+logger = logging.getLogger(__name__)
+ser = None
+
+def ts():
+	return datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+
+def serial_write(msg, error_wait=0, log_error=False):
+	global ser
+	try:
+		ser.write("{}\n".format(msg))
+	except Exception:
+		try:
+			ser = serial.Serial(sys.argv[1], 9600, timeout=1)
+		except Exception as e:
+			if log_error:
+				logger.error("{}: cannot reopen serial connection: {}, command lost: {}.".format(ts(), e, msg))
+			time.sleep(error_wait)
+		else:
+			ser.write("{}\n".format(msg))
 
 def send_ticks():
 	while True:
-		ser.write("eachTick\n")
+		serial_write("eachTick", error_wait=30)
 		time.sleep(1)
 
-def sigint_handler(signal, frame):
-	print "closing logfile and serial connection. bye."
-	f.close()
-	ser.close()
-        sys.exit(0)
-
 def send_states():
-   	f.seek(0, 2)
+	try:
+		f = open(syslog)
+	except Exception as e:
+		logger.error("{}: cannot open syslog: {}. exit.".format(ts(), e))
+		sys.exit(1)
+	f.seek(0, 2)
+
+	t = threading.Thread(target=send_ticks).start()
+
 	while True:
     		latest_logs = f.readline()
     		if latest_logs:
 			match = re.match(".+ Vitamin-R .+StateMachine: now in new state: <([a-zA-Z]+):.+", latest_logs)
 			if match:
 				command = match.group(1)
-				print "sending changed Vitamin-R state to serial: {}".format(command)
-				ser.write("{}\n".format(command));
+				logger.debug("{}: sending changed Vitamin-R state to serial: {}".format(ts(), command))
+				serial_write(command, log_error=True)
 
 if __name__ == "__main__":
 	if len(sys.argv) != 2:
-		exit_programm("usage: {} /dev/vitamin-led-usb\n".format(sys.argv[0]), 1)
+		print "usage: {} /dev/vitamin-led-usb\n".format(sys.argv[0])
+		sys.exit(1)
 
-	print "opening serial connection and watching syslog for Vitamin-R state changes..."
+	logger.setLevel(logging.DEBUG)
+	logger.propagate = False
+	fh = logging.FileHandler(log_file, "w")
+	fh.setLevel(logging.DEBUG)
+	logger.addHandler(fh)
 
-	ser = serial.Serial(sys.argv[1], 9600, timeout=1)
-	if not ser:
-		exit_programm("cannot open serial device {}.".format(sys.argv[1]), 1)
+	logger.info("{}: start watching syslog for Vitamin-R state changes...".format(ts()))
 
-	f = open('/var/log/system.log')
-	if not f:
-		exit_programm("cannot open /var/log/syslog.".format(sys.argv[1]), 1)
-
-	signal.signal(signal.SIGINT, sigint_handler)
-
-	t = threading.Thread(target=send_ticks).start()
-
-	send_states()	
+	daemon = Daemonize(
+		app="vitamin-led",
+		pid=pid_file,
+		action=send_states,
+		keep_fds=[fh.stream.fileno()]
+	)
+	daemon.start()
