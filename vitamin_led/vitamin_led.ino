@@ -1,16 +1,13 @@
 #include "FastSPI_LED2.h"
 
 #define NUM_LEDS 30
-#define NUM_LEDS2 240
 #define DATA_PIN 2
-// #define DATA_PIN 6
-// Clock pin only needed for SPI based chipsets when not using hardware SPI
 // #define CLOCK_PIN 8
 
 #define SLICE_TICKS 1500 // 25 min x 60 secs
-#define PAUSE_TICKS 300 // 5 min x 60secs
+#define PAUSE_TICKS 300  // 5 min x 60secs
 
-CRGB leds[NUM_LEDS2];
+CRGB leds[NUM_LEDS];
 String input_cmd;
 int ticks = SLICE_TICKS;
 
